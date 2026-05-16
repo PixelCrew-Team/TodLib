@@ -8,7 +8,7 @@ import threading
 import time
 from base64 import b64encode
 from contextlib import contextmanager
-from typing import Callable
+from typing import Callable, Optional
 import requests
 
 from .models import constants
@@ -111,6 +111,19 @@ class ToDusClient:
         resp.raise_for_status()
         return "".join([c for c in resp.text if c in string.printable])
 
+    def upload_file(self, token: str, file_bytes: bytes, file_type: str = "picture") -> str:
+        url = "https://s3.todus.cu/"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "ToDus Android",
+        }
+        files = {
+            "file": ("file", file_bytes, f"image/jpeg" if file_type == "picture" else "application/octet-stream")
+        }
+        resp = self.session.post(url, headers=headers, files=files, timeout=60)
+        resp.raise_for_status()
+        return resp.json().get("url", "")
+
     def _connect_xmpp(self) -> ssl.SSLSocket:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
@@ -203,6 +216,11 @@ class ToDusClient:
         with self._xmpp_session(token) as sock:
             sock.send(msg.encode())
 
+    def send_file_message(self, token: str, to_jid: str, url: str, file_type: str, caption: str = "", file_name: str = "file", file_size: int = 0) -> None:
+        msg = stanza.file_message(to_jid, url, file_type, caption, file_name, file_size)
+        with self._xmpp_session(token) as sock:
+            sock.send(msg.encode())
+
     def listen_messages(self, token: str, callback: Callable[[dict], None]) -> None:
         while True:
             try:
@@ -290,15 +308,26 @@ class ToDusClient2(ToDusClient):
             raise AuthenticationError("No hay password")
         self._token = super().login(self.phone_number, self.password)
 
+    def upload_file(self, file_bytes: bytes, file_type: str = "picture") -> str:
+        if not self._token:
+            self.login()
+        return super().upload_file(self._token, file_bytes, file_type)
+
     def send_message(self, to_phone: str, body: str) -> None:
         if not self._token:
-            raise AuthenticationError("No autenticado")
+            self.login()
         to_jid = util.build_jid(to_phone)
         super().send_message(self._token, to_jid, body)
 
+    def send_file_message(self, to_phone: str, url: str, file_type: str, caption: str = "", file_name: str = "file", file_size: int = 0) -> None:
+        if not self._token:
+            self.login()
+        to_jid = util.build_jid(to_phone)
+        super().send_file_message(self._token, to_jid, url, file_type, caption, file_name, file_size)
+
     def listen_messages(self, callback: Callable[[dict], None]) -> None:
         if not self._token:
-            raise AuthenticationError("No autenticado")
+            self.login()
         while True:
             try:
                 super().listen_messages(self._token, callback)
